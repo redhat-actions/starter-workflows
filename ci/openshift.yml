@@ -50,9 +50,11 @@ env:
   # ⬇️ EDIT if you wish to set the kube context's namespace after login. Leave blank to use the default namespace.
   OPENSHIFT_NAMESPACE: ""
 
-  # If you wish to manually provide the APP_NAME and TAG, set them here, otherwise they will be auto-detected.
+  # If you wish to manually provide the APP_NAME and TAGS, set them here, otherwise they will be auto-detected.
   APP_NAME: ""
-  TAG: ""
+
+  # Tags should be provided space seperated
+  TAGS: ""
 
 on:
   # https://docs.github.com/en/free-pro-team@latest/actions/reference/events-that-trigger-workflows
@@ -64,6 +66,9 @@ jobs:
   openshift-ci-cd:
     name: Build and deploy to OpenShift
     runs-on: ubuntu-20.04
+    env:
+      ROUTE: ${{ steps.deploy-and-expose.outputs.route }}
+      SELECTOR: ${{ steps.deploy-and-expose.outputs.selector }}
 
     steps:
     - uses: actions/checkout@v2
@@ -74,18 +79,19 @@ jobs:
         echo "APP_NAME=$(basename $PWD)" | tee -a $GITHUB_ENV
 
     - name: Determine tag
-      if: env.TAG == ''
+      if: env.TAGS == ''
       run: |
-        echo "TAG=${GITHUB_SHA::7}" | tee -a $GITHUB_ENV
+        echo "TAGS=${GITHUB_SHA::7}" | tee -a $GITHUB_ENV
 
     # https://github.com/redhat-actions/buildah-build#readme
     - name: Build from Dockerfile
-      uses: redhat-actions/buildah-build@v1
+      id: image-build
+      uses: redhat-actions/buildah-build@v2
       with:
         image: ${{ env.APP_NAME }}
-        tag: ${{ env.TAG }}
+        tags: ${{ env.TAGS }}
         # If you don't have a dockerfile, see:
-        # https://github.com/redhat-actions/buildah-build#building-from-scratch
+        # https://github.com/redhat-actions/buildah-build#inputs-for-build-without-dockerfile
         # Otherwise, point this to your Dockerfile relative to the repository root.
         dockerfiles: |
           ./Dockerfile
@@ -93,10 +99,10 @@ jobs:
     # https://github.com/redhat-actions/push-to-registry#readme
     - name: Push to registry
       id: push-to-registry
-      uses: redhat-actions/push-to-registry@v1
+      uses: redhat-actions/push-to-registry@v2
       with:
-        image: ${{ env.APP_NAME }}
-        tag: ${{ env.TAG }}
+        image: ${{ steps.image-build.outputs.image }}
+        tags: ${{ steps.image-build.outputs.tags }}
         registry: ${{ env.REGISTRY }}
         username: ${{ env.REGISTRY_USER }}
         password: ${{ env.REGISTRY_PASSWORD }}
@@ -109,7 +115,7 @@ jobs:
 
     # https://github.com/redhat-actions/oc-login#readme
     - name: Log in to OpenShift
-      uses: redhat-actions/oc-login@v1.1
+      uses: redhat-actions/oc-login@v1
       with:
         openshift_server_url: ${{ env.OPENSHIFT_SERVER }}
         openshift_token: ${{ env.OPENSHIFT_TOKEN }}
@@ -117,30 +123,14 @@ jobs:
         namespace: ${{ env.OPENSHIFT_NAMESPACE }}
 
     # This step should create a deployment, service, and route to run your app and expose it to the internet.
-    # Feel free to replace this with 'oc apply', 'helm install', or however you like to deploy your app.
+    # https://github.com/redhat-actions/oc-new-app#readme
     - name: Create and expose app
-      run: |
-        export IMAGE="${{ steps.push-to-registry.outputs.registry-path }}"
-        export PORT=${{ env.APP_PORT }}
-
-        export SELECTOR="app=${{ env.APP_NAME }}"
-        echo "SELECTOR=$SELECTOR" >> $GITHUB_ENV
-
-        set -x
-        # Take down any old deployment
-        oc delete all --selector="$SELECTOR"
-        oc new-app --name $APP_NAME --docker-image="$IMAGE"
-
-        # Make sure the app port is exposed
-        oc patch svc $APP_NAME -p "{ \"spec\": { \"ports\": [{ \"name\": \"$PORT-tcp\", \"port\": $PORT }] } }"
-        oc expose service $APP_NAME --port=$PORT
-
-        oc get all --selector="$SELECTOR"
-        set +x
-
-        export ROUTE="$(oc get route $APP_NAME -o jsonpath='{.spec.host}')"
-        echo "$APP_NAME is exposed at $ROUTE"
-        echo "ROUTE=$ROUTE" >> $GITHUB_ENV
+      id: deploy-and-expose
+      uses: redhat-actions/oc-new-app@v1
+      with:
+        app_name: ${{ env.APP_NAME }}
+        image: ${{ steps.push-to-registry.outputs.registry-path }}
+        port: ${{ env.APP_PORT }}
 
     - name: View application route
       run: |
