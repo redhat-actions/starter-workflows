@@ -92,7 +92,7 @@ jobs:
         image: ${{ env.APP_NAME }}
         tags: ${{ env.TAG }}
         # If you don't have a dockerfile, see:
-        # https://github.com/redhat-actions/buildah-build#inputs-for-build-without-dockerfile
+        # https://github.com/redhat-actions/buildah-build#scratch-build-inputs
         # Otherwise, point this to your Dockerfile relative to the repository root.
         dockerfiles: |
           ./Dockerfile
